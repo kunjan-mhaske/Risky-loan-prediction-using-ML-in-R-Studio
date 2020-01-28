@@ -1,6 +1,6 @@
 ---
 title: "KDD PROJECT FINAL"
-output: html_notebook
+output: rmarkdown::github_document
 ---
 
 ## DATA LOADING
