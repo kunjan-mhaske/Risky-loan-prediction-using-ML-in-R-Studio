@@ -1,0 +1,241 @@
+---
+title: "KDD KNN SVM"
+output: html_notebook
+---
+
+```{r}
+library('dplyr') # data manipulation
+library(readr)
+library(descr)
+```
+
+```{r}
+loan <- read.csv("~/R/KDD/loan.csv")
+```
+
+```{r}
+sample = loan[-c(1, 2, 11, 19, 20, 23, 52)]
+sample = sample[-c(48,49,47,59,57,53,67,65,58,66,62,55,56,54,60,61,63,24,45,23,42,51,52,64,40,28,17,44,43)]
+sample2 = sample[-c(1,3,25,35,28,31,30)]
+sample2 = sample2[-c(18,11,15)]
+```
+
+```{r}
+sample2$status <- ifelse(sample2$loan_status %in% c("Charged Off", "Default", "Late (16-30 days)", "Late (31-120 days)", "Does not meet the credit policy. Status:Charged Off", "In Grace Period"), 1, ifelse(sample2$loan_status == "Fully Paid", 0, "Other"))
+
+sample2 <- sample2%>% filter(sample2$status != "Other" )
+
+table(sample2$status)
+```
+
+
+
+```{r}
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+sample2$dti_norm <- normalize(sample2$dti)
+```
+
+
+```{r}
+sample2$int_rate <- as.numeric(gsub("%","", sample2$int_rate))
+sample2$term <- as.numeric(as.factor(sample2$term))
+sample2$grade <- as.numeric(as.factor(sample2$grade))
+sample2$sub_grade <- as.numeric(as.factor(sample2$sub_grade))
+sample2$home_ownership <- as.numeric(as.factor(sample2$home_ownership))
+sample2$verification_status <- as.numeric(as.factor(sample2$verification_status))
+sample2$purpose <- as.numeric(as.factor(sample2$purpose))
+sample2$emp_length <- as.numeric(as.factor(sample2$emp_length))
+sample2$initial_list_status <- as.numeric(as.factor(sample2$initial_list_status))
+sample2$application_type <- as.numeric(as.factor(sample2$application_type))
+```
+
+# KNN
+
+```{r}
+library(class)
+library(descr)
+
+sample2 = na.omit(sample2)
+good = sample2[sample2$status == 0, ]
+bad = sample2[sample2$status == 1, ]
+
+set.seed(1)
+sample_tmp = good[sample(nrow(good),30000,replace=FALSE, prob=NULL),]
+sample_tmp = rbind(sample_tmp, bad[sample(nrow(bad),30000,replace=FALSE, prob=NULL),])
+dim(sample_tmp)
+
+itrain = sample(1:nrow(sample_tmp),50000)
+
+sample_train = sample_tmp[itrain,]
+sample_test = sample_tmp[-itrain,]
+
+knn_train = select(sample_train, funded_amnt, term, int_rate, installment, grade, annual_inc, 
+emp_length, dti, delinq_2yrs, open_acc, pub_rec, application_type,inq_last_6mths, initial_list_status, out_prncp, total_rec_int, total_rec_late_fee)
+
+knn_test = select(sample_test, funded_amnt, term, int_rate, installment, grade, annual_inc, 
+emp_length, dti, delinq_2yrs, open_acc, pub_rec, application_type,inq_last_6mths, initial_list_status, out_prncp, total_rec_int, total_rec_late_fee)
+
+pred <- knn(knn_train, knn_test, sample_train$status, k = 19)
+crosstab(sample_test$status, pred, prop.t = TRUE, plot=FALSE)
+```
+
+# KNN CV
+
+```{r}
+library("tibble")
+library(ggplot2)
+library(tidyr)
+library('dplyr')
+library(class)
+library(descr)
+
+K_for_fold = 2
+k_values <- c(3, 7, seq(from=9, to=50, by=10))
+K_for_knn = length(k_values)
+
+cv.error <- tibble(k=rep(0, K_for_knn),
+                  tr=rep(0, K_for_knn),
+                  tst=rep(0, K_for_knn))
+
+for(j in 1:K_for_fold){
+  set.seed(j*400)
+  num_rec_cv_tr = floor(nrow(sample_tmp)*(K_for_fold-1)/K_for_fold)
+  itrain = sample(1:nrow(sample_tmp),num_rec_cv_tr)
+  train_data = sample_tmp[itrain,-c(11,12,22,26,27)]
+  test_data = sample_tmp[-itrain,-c(11,12,22,26,27)]
+  
+  cv.error.train <- matrix(0, nrow=K_for_knn, ncol=K_for_fold) %>% 
+            as_tibble() %>% 
+            add_column(k=k_values)
+  
+  cv.error.test <- matrix(0, nrow=K_for_knn, ncol=K_for_fold) %>% 
+            as_tibble() %>% 
+            add_column(k=k_values)
+  
+  for(i in 1:K_for_knn){
+    K = k_values[i]
+    train_data_x <- train_data %>% select(-status)
+    train_data_y <- train_data$status # turn into a vector
+    
+    
+    test_data_x <- test_data %>% select(-status)
+    test_data_y <- test_data$status # turn into a vector
+    
+    # get predictions on training data
+    knn_train_prediction <- knn(train=train_data_x, # training x
+                                test=train_data_x, # test on training data x
+                                cl=train_data_y, # train y
+                                k = K) # set k
+    
+    # get predictions on test data
+    knn_test_prediction <- knn(train=train_data_x, # training x
+                               test=test_data_x, # test x
+                               cl=train_data_y, # train y
+                               k = K) # set k
+    
+    cv.error.train[i, paste0('V',j)] <- mean(train_data_y != knn_train_prediction)
+    cv.error.test[i, paste0('V',j)] <- mean(test_data_y != knn_test_prediction)
+  }
+}
+cv.error.train
+
+cv.error$k <- k_values
+cv.error$tr <- cv.error.train %>% select(-k) %>% rowMeans()
+cv.error$tst <- cv.error.test %>% select(-k) %>% rowMeans()
+
+# compare full train, cv, and test error
+cv.error %>% 
+    gather(key='type', value='error', tr, tst) %>% 
+    ggplot() +
+    geom_point(aes(x=k, y=error, color=type, shape=type)) +
+    geom_line(aes(x=k, y=error, color=type, linetype=type))+
+    ggtitle('knn cross validation')
+```
+
+
+
+
+# SVM
+
+```{r}
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(e1071)
+library(xgboost)
+library(stringr)
+library(lubridate)
+library(tm)
+library(rms)
+library(glmnet)
+library(pROC)
+# library(doMC)
+# install.packages('doMC')
+library(kernlab)
+```
+
+
+```{r}
+itrain = sample(1:nrow(sample_tmp),nrow(sample_tmp)*0.01)
+train_data = sample_tmp[itrain,-c(11,12,22,26,27)]
+test_data = sample_tmp[-itrain,-c(11,12,22,26,27)]
+
+test_data_ind = sample(1:nrow(test_data), 500)
+test_data = test_data[test_data_ind,]
+
+train_data$status <- as.numeric(train_data$status)
+test_data$status <- as.numeric(test_data$status)
+
+# Basic SVM model
+
+svmfit =svm(status∼., data=train_data, kernel ="radial", gamma =2, cost = 5)
+svmfit
+```
+
+```{r}
+predict_loan_status_svm = predict(svmfit,test_data,type="probabilities")
+
+predict_loan_status_label = ifelse(predict_loan_status_svm<0.5,0,1)
+table(predict_loan_status_label, test_data$status)
+```
+
+
+# fine tune - try to find best gamma and cost values
+```{r}
+tune.out=tune(svm , status∼., data=train_data, kernel ="radial",
+ranges =list(cost=c(0.1 ,1 ,10 ,100 ,1000),
+gamma=c(0.5,1,2,3,4)))
+
+summary(tune.out)
+```
+
+```{r}
+pred=predict(tune.out$best.model, test_data$status ,newdata=test_data)
+
+predict_label = ifelse(pred<0.5,0,1)
+
+table(predict_label, test_data$status)
+```
+
+```{r}
+perform_df <- data.frame(matrix(ncol=3, nrow=1))
+colnames(perform_df) <- c("ACCURACY", "SENSITIVITY", "SPECIFICITY")
+
+perform_df$ACCURACY <- round(mean(predict_label == test_data$status)*100,3)
+
+perform_df$SENSITIVITY <- round(length(which(predict_label==1 & test_data$status==1)) / length(which(test_data$status==1))*100,3)
+
+perform_df$SPECIFICITY <- round(length(which(predict_label==0 & test_data$status==0)) / length(which(test_data$status==0))*100,3)
+
+perform_df
+```
+
+

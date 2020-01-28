@@ -1,0 +1,73 @@
+---
+title: "KDD Logistic Regression"
+output: html_notebook
+---
+Loading data
+
+Finding out the missing values in the data.
+```{r}
+library(dplyr)
+#rm(list=ls())
+data = read.csv("~/R/KDD/loan.csv",na = " ")
+dim(data)
+names(data)
+match("term",names(data))
+data1 = data[,c(17,3,7,9,12,13,14,6)]
+sapply(data1 , function(x) sum(is.na(x)))
+```
+
+```{r}
+dat1 = data1 %>% filter(!is.na(annual_inc) , !(home_ownership %in% c('NONE' , 'ANY')) , emp_length != 'n/a')
+
+```
+
+We want to convert this variable to binary (1 for default and 0 for non-default) but we have 10 different levels. Loans with status Current, Late payments, In grace period need to be removed. Therefore, we create a new variable called loan_outcome where
+
+loan_outcome -> 1 if loan_status = ‘Charged Off’ or ‘Default’ loan_outcome -> 0 if loan_status = ‘Fully Paid’
+
+```{r}
+dat1$loan_outcome <- ifelse(dat1$loan_status %in% c("Charged Off", "Default", "Late (16-30 days)", "Late (31-120 days)", "Does not meet the credit policy. Status:Charged Off", "In Grace Period"), 1, ifelse(dat1$loan_status == "Fully Paid", 0, "Other"))
+
+dat1 <- dat1 %>% filter(dat1$loan_outcome != "Other")
+
+barplot(table(dat1$loan_outcome) , col = 'lightblue')
+```
+
+```{r}
+library(ggplot2)
+dat1 = dat1 %>%
+        select(-loan_status) %>%
+        filter(loan_outcome %in% c(0 , 1))
+#data1$loan_outcome
+dim(dat1)
+names(dat1)
+ggplot(dat1 , aes(x = grade , y = int_rate , fill = grade)) + 
+        geom_boxplot() + 
+        labs(y = 'Interest Rate' , x = 'Grade')
+```
+
+# Split dataset 
+```{r}
+dat1$loan_outcome = as.numeric(dat1$loan_outcome)
+idx = sample(dim(dat1)[1] , 0.75*dim(dat1)[1] , replace = F)
+trainset = dat1[idx , ]
+testset = dat1[-idx , ]
+```
+
+# Fit logistic regression
+```{r}
+glm.model = glm(loan_outcome ~ . , trainset , family = binomial)
+summary(glm.model)
+```
+
+# Performance of GLM:
+```{r}
+glm.pred1 = predict(glm.model,testset,type= "response")
+preds = predict(glm.model , testset , type = 'response')
+length(preds)
+glm.probs1 = ifelse(glm.pred1 > 0.5 , 1 , 0)
+confusion_matrix_50_1 = table(testset$loan_outcome, glm.probs1)
+confusion_matrix_50_1
+mean(glm.probs1==testset$loan_outcome)
+ggplot(data.frame(glm.pred1) , aes(glm.pred1)) + geom_density(fill = 'lightblue' , alpha = 0.4) +labs(x = 'Predicted Probabilities on test set')
+```

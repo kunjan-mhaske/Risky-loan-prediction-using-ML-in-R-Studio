@@ -1,0 +1,261 @@
+---
+title: "KDD PROJECT FINAL"
+output: html_notebook
+---
+
+## DATA LOADING
+
+Read the data:
+```{r}
+library(readr)
+loan <- read.csv("~/R/KDD/loan.csv", na.strings = c(" ",""))
+dim(loan)
+```
+
+## VISUALIZATION AND EXPLORATION
+
+Visualize the tables from remaining data
+ex: loan_amount, funded_amount, investor_funds
+```{r}
+hist(loan$loan_amnt, breaks=200, main="Loan Applied by Borrower", xlab="Amount", las=1, col='#2EAD46', border = "#2EAD46")
+## or we can use density graph
+plot(density(loan$loan_amnt), col='#2EAD46')
+
+hist(loan$funded_amnt, breaks=200, main="Amount Funded by Lender", xlab="Amount", las=1, col='#2F8FF7', border = '#2F8FF7')
+plot(density(loan$funded_amnt), col='#2F8FF7')
+
+hist(loan$funded_amnt_inv, breaks=200, main="Amount committed by Investors", xlab="Amount", las=1, col='#F7522F', border="#F7522F")
+plot(density(loan$funded_amnt), col='#F7522F')
+
+```
+Some Bar plots
+```{r}
+plot(loan$term, col=rainbow(5), main="Number of payments on loan")
+plot(loan$grade, col=rainbow(5), main="Letter of Credit assigned loan grade")
+plot(loan$emp_length, col=rainbow(10), main="Employment Length in Years")
+```
+
+Some Box plots:
+```{r}
+plot(loan$loan_amnt~loan$verification_status, xlab='Verification Status', ylab='Loan Amount Issued', main='Loan amount issued vs Verification Status of Borrower')
+plot(loan$loan_amnt~loan$application_type, xlab='Application Type', ylab='Loan Amount Issued', main='Loan amount issued vs Application Type of Borrower')
+```
+
+To generate Correlation Matrix: 
+first extract matrix from sample data then feed it to the corrplot library
+```{r}
+install.packages('corrplot')
+source("http://www.sthda.com/upload/rquery_cormat.r")
+```
+
+```{r}
+cor_mat <- loan[,c('loan_amnt','funded_amnt','funded_amnt_inv','int_rate','installment','annual_inc','dti','revol_bal','revol_util','total_acc','out_prncp','out_prncp_inv','total_pymnt','total_pymnt_inv','total_rec_prncp','total_rec_int','last_pymnt_amnt')]
+
+rquery.cormat(cor_mat)
+```
+
+## CLEANING:
+
+```{r}
+# Removing columns having more than 10% na values.
+clean_loan <- loan[, -which(colMeans(is.na(loan)) > 0.1)]
+dim(clean_loan)
+```
+
+Removing irrelevant columns.
+'id', 'member_id', 'emp_title', 'url', 'zip_code','policy_code'
+```{r}
+# match('url',names(clean_loan))
+clean_loan = clean_loan[-c(1, 2, 11, 19, 22, 47)]
+dim(clean_loan)
+```
+
+We tried GLM and Linear Regression for multiple times using different set of attributes and finally came to the conclusion that following attributes needed to be removed which are not significant towards the goal.
+
+Remove issue_d, title, addr_state, earliest_cr_line last_pymnt_d last_credit_pull_d
+```{r}
+clean_loan = clean_loan[-c(13, 17, 18, 21, 38, 40)]
+dim(clean_loan)
+```
+
+Clean any na values and check if there are any NA values present in it
+```{r}
+clean_loan = na.omit(clean_loan)
+anyNA(clean_loan)
+dim(clean_loan)
+```
+
+## PREPROCESSING:
+
+Replace loan_status values with good or bad loans based on the labels in original loan_status
+```{r}
+bad_values = c("Charged Off", "Default", "Does not meet the credit policy. Status:Charged Off", "In Grace Period","Late (16-30 days)","Late (31-120 days)")
+
+loancond <- function(status)
+    {
+      if (status %in% bad_values)
+      {
+        return('bad_loan')
+      }
+      else
+      {
+        return('good_loan')
+      }
+    }
+
+clean_loan['loan_status'] = apply(clean_loan['loan_status'], MARGIN = 1, FUN = loancond)
+dim(clean_loan)
+str(clean_loan$loan_status)
+```
+
+```{r}
+DescTools::Desc(clean_loan)
+```
+
+## BALANCED RESAMPLING FOR TRAINING AND TESTING
+We found out that LOAN_STATUS, which we are taking as Response Variable, is highly unbalanced
+if we take the whole dataset. Hence we decided to resample the dataset.
+
+```{r}
+set.seed(100)
+
+all_good_loans = clean_loan[clean_loan$loan_status == 'good_loan', ]
+all_bad_loans = clean_loan[clean_loan$loan_status == 'bad_loan', ]
+
+sample <- all_good_loans[sample(nrow(all_good_loans),nrow(all_bad_loans), replace=F, prob=NULL), ]
+sample <- rbind(sample, all_bad_loans[,])
+
+sample$loan_status = as.factor(sample$loan_status)
+```
+
+Now we have balanced Loan Status in subsample with as max as possible records.
+```{r}
+DescTools::Desc(sample$loan_status)
+```
+
+Final Structure of Sample Dataset:
+```{r}
+str(sample)
+```
+
+Now create training and testing data sets in 70:30 ratio
+```{r}
+set.seed(100)
+# shuffle the rows
+sample <- sample[sample(nrow(sample)) , ]
+
+percentage = nrow(sample) * 0.7 
+itrain = sample(1:nrow(sample), percentage)
+
+sample_train = sample[itrain,]
+sample_test = sample[-itrain,]
+```
+
+```{r}
+dim(sample_train)
+dim(sample_test)
+```
+
+Balanced Class in training and testing data set as well.
+```{r}
+DescTools::Desc(sample_train$loan_status)
+DescTools::Desc(sample_test$loan_status)
+```
+
+## TRAINING and TESTING THE MODELS
+
+# 1) DECISION TREE
+
+```{r}
+library(rpart)
+set.seed(100)
+tree_model = rpart(loan_status~., data=sample_train[,-c(27,34)], method ="class")
+
+summary(tree_model)
+```
+
+```{r}
+printcp(tree_model)
+plotcp(tree_model)
+```
+The value of cp should be least, so that the cross-validated error rate is minimum.
+
+```{r}
+library(rpart.plot)
+rpart.plot(tree_model)
+```
+```{r}
+tree_model$variable.importance
+```
+
+
+```{r}
+set.seed(100)
+tree_pred = predict(tree_model,sample_test, type = "class")
+with(sample_test, table(loan_status, tree_pred))
+```
+
+Performance of Decision Tree:
+```{r}
+perform_df <- data.frame(matrix(ncol=3, nrow=1))
+colnames(perform_df) <- c("ACCURACY", "SENSITIVITY", "SPECIFICITY")
+
+perform_df$ACCURACY <- round(mean(tree_pred == sample_test$loan_status)*100,3)
+
+perform_df$SENSITIVITY <- round(length(which(tree_pred=="bad_loan" & sample_test$loan_status=="bad_loan")) / length(which(sample_test$loan_status=="bad_loan"))*100,3)
+
+perform_df$SPECIFICITY <- round(length(which(tree_pred=="good_loan" & sample_test$loan_status=="good_loan")) / length(which(sample_test$loan_status=="good_loan"))*100,3)
+
+perform_df
+```
+
+
+# RANDOM FOREST
+
+```{r}
+library(randomForest)
+set.seed(100)
+rf_model = randomForest(loan_status~. , data = sample_train, ntree = 100)
+
+summary(rf_model)
+str(rf_model)
+plot(rf_model)
+```
+
+Importance of Predictors
+```{r}
+importance(rf_model,type = 2)
+varImpPlot(rf_model)
+```
+Performance of RF Model:
+```{r}
+set.seed(100)
+fr_pred = predict(rf_model, sample_test)
+with(sample_test, table(loan_status, fr_pred))
+```
+
+Performance of Random Forest:
+```{r}
+perform_df <- data.frame(matrix(ncol=3, nrow=1))
+colnames(perform_df) <- c("ACCURACY", "SENSITIVITY", "SPECIFICITY")
+
+perform_df$ACCURACY <- round(mean(fr_pred == sample_test$loan_status)*100,3)
+
+perform_df$SENSITIVITY <- round(length(which(fr_pred=="bad_loan" & sample_test$loan_status=="bad_loan")) / length(which(sample_test$loan_status=="bad_loan"))*100,3)
+
+perform_df$SPECIFICITY <- round(length(which(fr_pred=="good_loan" & sample_test$loan_status=="good_loan")) / length(which(sample_test$loan_status=="good_loan"))*100,3)
+
+perform_df
+```
+
+Cross validation of RF:
+
+loan_status total_pymnt last_pymnt_amnt
+```{r}
+names(sample_train)
+
+set.seed(100)
+rf.cv <- rfcv(sample_train[,-c(13,27,34)],sample_train[,"loan_status"], ntree=20, cv.fold = 50)
+with(rf.cv, plot(n.var, error.cv, type='o'))
+```
+
